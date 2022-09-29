@@ -13,7 +13,7 @@ import torch.utils.data as data
 # warnings.filterwarnings("ignore")
 
 def backend_setting(option):
-    log_dir = os.path.join(option.save_dir, option.exp_name)
+    log_dir = os.path.join(option.save_dir, option.exp_name, str(option.color_var))
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -28,7 +28,7 @@ def backend_setting(option):
         option.cuda = False
 
     if option.cuda:
-        torch.cuda.set_device(option.gpu)
+        # torch.cuda.set_device(option.gpu)
 
         torch.cuda.manual_seed_all(option.random_seed)
         cudnn.benchmark = option.cudnn_benchmark
@@ -40,7 +40,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-e', '--exp_name', default='csad0020', help='experiment name')
-    parser.add_argument('--color_var', default=0.020, type=float, help='variance for color distribution')
+    parser.add_argument('--color_var', default=0.02, type=float, help='variance for color distribution')
     # parser.add_argument('--checkpoint', default='baseline/pretraincheckpoint_step_0000.pth', help='checkpoint to resume')
     parser.add_argument('--checkpoint', default=None, help='checkpoint to resume')
     parser.add_argument('--lr', default=0.00005, type=float, help='initial learning rate')
@@ -59,8 +59,11 @@ def main():
 
     parser.add_argument('--log_step', default=150, type=int, help='step for logging in iteration')
     parser.add_argument('--save_step', default=1, type=int, help='step for saving in epoch')
-    parser.add_argument('--data_dir', default='./colored_mnist', help='data directory')
-    parser.add_argument('--save_dir', default='./', help='save directory for checkpoint')
+    # parser.add_argument('--data_dir', default='/nas/vista-ssd01/users/jiazli/datasets/CMNIST/generated_uniform', help='data directory')
+    parser.add_argument('--data_dir', default='/nas/vista-ssd01/users/jiazli/datasets/CMNIST/generated_shuffle', help='data directory')
+    # parser.add_argument('--data_dir', default='/nas/vista-ssd01/users/jiazli/datasets/CMNIST/generated_render_uniform', help='data directory')
+    # parser.add_argument('--data_dir', default='/nas/vista-ssd01/users/jiazli/datasets/CMNIST/given', help='data directory')
+    parser.add_argument('--save_dir', default='./results', help='save directory for checkpoint')
     parser.add_argument('--data_split', default='train', help='data split to use')
     parser.add_argument('--use_pretrain', default=False, type=bool,
                         help='whether it use pre-trained parameters if exists')

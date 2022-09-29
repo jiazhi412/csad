@@ -3,20 +3,28 @@ import os
 import json
 import time
 import logging
+import torch
+
+
 
 
 def save_option(option):
-    option_path = os.path.join(option.save_dir, option.exp_name, "options.json")
+    option_path = os.path.join(option.save_dir, option.exp_name, str(option.color_var), "options.json")
 
     with open(option_path, 'w') as fp:
         json.dump(option.__dict__, fp, indent=4, sort_keys=True)
 
+def save_option_CelebA(option):
+    option_path = os.path.join(option.save_dir, option.exp_name, option.attributes[0], option.eval_mode, "options.json")
+
+    with open(option_path, 'w') as fp:
+        json.dump(option.__dict__, fp, indent=4, sort_keys=True)
 
 def logger_setting(exp_name, save_dir, debug, filename='train.log'):
     logger = logging.getLogger(exp_name)
     formatter = logging.Formatter('[%(name)s] %(levelname)s: %(message)s')
 
-    log_out = os.path.join(save_dir, exp_name, filename)
+    log_out = os.path.join(save_dir, filename)
     file_handler = logging.FileHandler(log_out)
     stream_handler = logging.StreamHandler()
 
@@ -47,6 +55,16 @@ def _num_correct(outputs, labels, topk=1):
     correct = correct.view(-1).sum()
     return correct
 
+def _num_correct_CelebA(outputs, labels):
+    # _, preds = outputs.topk(k=topk, dim=1)
+    # preds = preds.t()
+    preds = torch.sigmoid(outputs)
+    # print(preds)
+    # print(preds.round())
+    # print('djklasjd')
+    correct = (preds.round() == labels).view(-1).sum()
+    # print(correct)
+    return correct
 
 def _accuracy( outputs, labels):
     batch_size = labels.size(0)
@@ -56,3 +74,67 @@ def _accuracy( outputs, labels):
     correct = correct.view(-1).float().sum(0, keepdim=True)
     accuracy = correct.mul_(100.0 / batch_size)
     return accuracy
+
+import pickle
+def load_pkl(load_path):
+    with open(load_path, "rb") as f:
+        pkl_data = pickle.load(f)
+    return pkl_data
+
+
+def split_by_attr(key_list, target_dict, sex_dict):
+    pp, pn, np, nn = [], [], [], []
+    for k in key_list:
+        if sex_dict[k] == 1 and target_dict[k] == 1:
+            pp.append(k)
+        elif sex_dict[k] == 1 and target_dict[k] == 0:
+            pn.append(k)
+        elif sex_dict[k] == 0 and target_dict[k] == 1:
+            np.append(k)
+        elif sex_dict[k] == 0 and target_dict[k] == 0:
+            nn.append(k)
+    return pp, pn, np, nn
+
+def CelebA_eval_mode(key_list, target_dict, sex_dict, mode, train_or_test):
+    pp, pn, np, nn = split_by_attr(key_list, target_dict, sex_dict)
+    print(f'[{mode}] {train_or_test}: (Male-BlondHair) pp = {len(pp)}, pn = {len(pn)}, np = {len(np)}, nn = {len(nn)}')
+    m = min(len(pp), len(pn), len(np), len(nn))
+    if train_or_test == 'test' or train_or_test == 'dev':
+        if mode.startswith('unbiased'):
+            r_key_list = pp[:m] + pn[:m] + np[:m] + nn[:m]
+        elif mode.startswith('conflict'):
+            r_key_list = pp[:m] + nn[:m]
+        elif mode.startswith('conflict_pp'):
+            r_key_list = pp
+    elif train_or_test == 'train':
+        if mode == 'unbiased_ex' or mode == 'conflict_ex' or mode == 'conflict_pp_ex':
+            r_key_list = pn + np
+        else:
+            r_key_list = key_list
+    pp, pn, np, nn = split_by_attr(r_key_list, target_dict, sex_dict)
+    print(f'[{mode}] {train_or_test}: (Male-BlondHair) pp = {len(pp)}, pn = {len(pn)}, np = {len(np)}, nn = {len(nn)}')
+    return r_key_list
+
+def get_attr_index(attributes):
+    all_attr = ["5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive", "Bags", "Bald", "Bangs", "Big_Lips", "Big_Nose", "Black_Hair", "Blond_Hair", "Blurry", "Brown_Hair", "Bushy_Eyebrows", "Chubby", "Double_Chin", "Eyeglasses", "Goatee", "Gray_Hair", "Heavy_Makeup", "High_Cheekbone", "Mouth_Slightly_Open", "Mustache", "Narrow_Eyes", "No_Beard", "Oval_Face", "Pale_Skin", "Pointy_Nose", "Receding_Hairline", "Rosy_Cheeks", "Sideburns", "Smiling", "Straight_Hair", "Wavy_Hair", "Wearing_Earrings", "Wearing_Hat", "Wearing_Lipstick", "Wearing_Necklace", "Wearing_Necktie", "Young", "Male"]
+    res = []
+    for attribute in attributes:
+        res.append(all_attr.index(attribute))
+    return res
+
+def transfer_origin_for_testing_only(testing_dev_target_dict, attribute_list):
+    res = dict()
+    for k, v in testing_dev_target_dict.items():
+        res[k] = v[attribute_list].reshape(len(attribute_list))
+    return res
+
+import re
+def str_list(s):
+    if type(s) is type([]):
+        return s
+    range_re = re.compile(r"^(\d+)-(\d+)$")
+    m = range_re.match(s)
+    if m:
+        return list(range(int(m.group(1)), int(m.group(2)) + 1))
+    vals = s.split(",")
+    return [x for x in vals]

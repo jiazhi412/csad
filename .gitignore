@@ -1,0 +1,5 @@
+results*
+errors*
+outputs*
+kill.sh
+*__pycache__*

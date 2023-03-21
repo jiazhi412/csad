@@ -4,10 +4,8 @@ from torch import nn
 from torch import optim
 from torch.autograd import Variable
 import models
-import numpy as np
 import time
 import os
-import math
 from tqdm import tqdm
 from utils import logger_setting, printandlog, _num_correct_CelebA, _accuracy, _num_correct
 
@@ -20,6 +18,7 @@ class Trainer(object):
         self.save_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
         self.exp_dir = os.path.join(option.save_dir, option.exp_name)
 
+        # set network
         in_dim = 8
         # hidden_dims = [84, 10]
         hidden_dims = [64]
@@ -29,30 +28,14 @@ class Trainer(object):
         self.classDisentangle = models.MLP(64, [], 64).cuda()
         self.biasPredictor = models.MLP(64, [], option.n_class_bias).cuda()
         self.classPredictor = models.MLP(64, [], option.n_class).cuda()
-
-        
-
-
-        # self.feaExtractor = models.ResNet18(n_classes=1, pretrained=True).cuda() # n_classes is dummy
-        # self.biasDisentangle = models.disentangler().cuda()
-        # self.classDisentangle = models.disentangler().cuda()
-        # self.biasPredictor = models.sexClassifier(option.n_class_bias).cuda()
-        # self.classPredictor = models.classifier(option.n_class).cuda()
         self.MI = models.MI_s(option).cuda()
 
-        
-        
-        
-        
-
+        # set loss function
         self.valiloader = None
         self.bias_loss = nn.MSELoss().cuda()
-        # if self.Diabetes_train_mode.endswith('ex'):
-        #     self.bias_loss = nn.BCEWithLogitsLoss().cuda()
-        # else:
-        #     self.bias_loss = nn.CrossEntropyLoss().cuda()
         self.classification_loss = nn.BCEWithLogitsLoss().cuda()
 
+        # set optim
         betad = (0.9, 0.999)
         self.betad = betad
         self.optim_feaextractor = optim.Adam(self.feaExtractor.parameters(), betas=self.betad, lr=self.option.lr,
@@ -65,12 +48,11 @@ class Trainer(object):
                                               weight_decay=self.option.weight_decay)
         self.optim_classPredictor = optim.Adam(self.classPredictor.parameters(), lr=self.option.lr, betas=self.betad,
                                                weight_decay=self.option.weight_decay)
-
         self.optim_MI = optim.Adam(self.MI.parameters(), lr=self.option.lr, betas=betad,
                                    weight_decay=self.option.weight_decay)
 
+        # set lr scheduler
         lr_lambda = lambda step: self.option.lr_decay_rate ** (step // self.option.lr_decay_period)
-
         self.scheduler_feaExt = optim.lr_scheduler.LambdaLR(self.optim_feaextractor, lr_lambda=lr_lambda, last_epoch=-1)
         self.scheduler_biasDisentangle = optim.lr_scheduler.LambdaLR(self.optim_biasDisentangle, lr_lambda=lr_lambda,
                                                                      last_epoch=-1)
@@ -348,7 +330,6 @@ class Trainer(object):
 
     def _load_model(self):
         ckpt = torch.load(self.option.checkpoint)
-
         self.feaExtractor.load_state_dict(ckpt['feaExtractor'])
         self.biasDisentangle.load_state_dict(ckpt['biasDisentangle'])
         self.classDisentangle.load_state_dict(ckpt['classDisentangle'])
@@ -363,6 +344,11 @@ class Trainer(object):
         self.scheduler_classPredictor.step()
         self.scheduler_feaExt.step()
         self.scheduler_MI.step()
+
+    def _get_variable(self, inputs):
+        if self.option.cuda:
+            return Variable(inputs.cuda())
+        return Variable(inputs)
 
     def train(self, train_loader, val_loader=None):
         self.valiloader = val_loader
@@ -404,7 +390,3 @@ class Trainer(object):
             }
         utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'Diabetes_CSAD_trials.csv'))
 
-    def _get_variable(self, inputs):
-        if self.option.cuda:
-            return Variable(inputs.cuda())
-        return Variable(inputs)

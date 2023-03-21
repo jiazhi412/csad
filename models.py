@@ -22,6 +22,23 @@ def weights_init_kaiming(m):
         init.normal(m.weight.data, 1.0, 0.02)
         init.constant(m.bias.data, 0.0)
 
+class MLP(nn.Module):
+    def __init__(self, in_dim, hidden_dims, out_dim):
+        super().__init__()
+        layers = []
+        for dim in hidden_dims:
+            layers.append(nn.Linear(in_dim, dim))
+            layers.append(nn.ReLU())
+            in_dim = dim
+        self.layers = nn.Sequential(*layers)
+        self.out = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x):
+        if len(x.size()) > 2:
+            x = x.view(x.size(0), -1)
+        x = self.layers(x)
+        return self.out(x)
+
 class ResNet18(nn.Module):    
     def __init__(self, n_classes, pretrained, hidden_size=1024, dropout=0.5):
         super().__init__()
@@ -29,7 +46,7 @@ class ResNet18(nn.Module):
         self.resnet.fc = nn.Linear(512, hidden_size)
         self.fc = nn.Linear(hidden_size, n_classes)
         self.relu = nn.ReLU(inplace=False)
-        self.dropout = nn.Dropout(dropout)        
+        self.dropout = nn.Dropout(dropout)
 
     def require_all_grads(self):
         for param in self.parameters():
@@ -107,6 +124,7 @@ class sexClassifier(nn.Module):
 
         for m in self.children():
             weights_init_kaiming(m)
+
     def forward(self, x):
 
         xr = self.fc1r(x)
@@ -154,6 +172,96 @@ class biasClassifier(nn.Module):
         xb = self.relub(xb)
         xb = self.fc2b(xb)
         return xr, xg, xb
+
+class MI_s(nn.Module):
+    def __init__(self, option):
+        super(MI_s, self).__init__()
+        self.option = option
+
+        # self.fc1_cls = nn.Linear(128, 128)
+        # self.fc2_cls = nn.Linear(128, 64)
+        self.fc3_cls = nn.Linear(64, 64)
+
+        # self.fc1_bias = nn.Linear(128, 128)
+        # self.fc2_bias = nn.Linear(128, 64)
+        self.fc3_bias = nn.Linear(64, 64)
+
+        for m in self.children():
+            weights_init_kaiming(m)
+        self.knnt1 = nn.parameter.Parameter(torch.Tensor([self.option.tau]), requires_grad=True)
+        self.knnt2 = nn.parameter.Parameter(torch.Tensor([self.option.tau]), requires_grad=True)
+        self.negt = nn.parameter.Parameter(torch.Tensor([self.option.alpha]), requires_grad=True)
+        self.post = nn.parameter.Parameter(torch.Tensor([self.option.alpha]), requires_grad=True)
+
+
+    def propogation(self, A1_normalized, c, RWR=True):
+        if RWR:
+            Ak1 = (1 - c) * torch.inverse(torch.eye(len(A1_normalized)).cuda() - c * A1_normalized)
+        else:
+            Ak1 = A1_normalized
+        Ak1 = (Ak1 + Ak1.t()) / 2
+        Ak1 = Ak1 / torch.sum(Ak1, dim=1, keepdim=True)
+        return Ak1
+
+
+    def forward(self, feaClass, feaBias, label, colorlabel, adv=False):
+        # get content features of target branch
+        # feacls = self.fc1_cls(feaClass)
+        # feacls = nn.functional.leaky_relu(feacls)
+        # feacls = self.fc2_cls(feacls)
+        # feacls = nn.functional.leaky_relu(feacls)
+        # feacls = self.fc3_cls(feacls)
+        feacls = self.fc3_cls(feaClass)
+        feacls = nn.functional.normalize(feacls)
+
+        # get content features of bias branch
+        # feabias = self.fc1_bias(feaBias)
+        # feabias = nn.functional.leaky_relu(feabias)
+        # feabias = self.fc2_bias(feabias)
+        # feabias = nn.functional.leaky_relu(feabias)
+        # feabias = self.fc3_bias(feabias)
+        feabias = self.fc3_bias(feaBias)
+        feabias = nn.functional.normalize(feabias)
+
+        # calculate similarity matrix for content features
+        A = feacls.matmul(feabias.t())  # batch*batch
+
+        # get similarity matrix for structural features
+        Acls = feacls.matmul(feacls.t())
+        Acls = F.softmax(self.knnt1 * Acls, dim=1)
+        Acls = (Acls + Acls.t()) / 2
+        Abias = feabias.matmul(feabias.t())
+        Abias = F.softmax(self.knnt2 * Abias, dim=1)
+        Abias = (Abias + Abias.t()) / 2
+
+        mask = []
+        for i in range(feacls.shape[0]):
+            maskItem = colorlabel - colorlabel[i]
+            mask.append(maskItem)
+        mask = torch.stack(mask, dim=0)
+        mask = torch.sum(torch.abs(mask) ** 2, dim=2)
+        mask = mask < 4
+        # label propogation
+        c = 0.5
+        Acls_prop = self.propogation(Acls, c)
+        Abias_prop = self.propogation(Abias, c)
+        A_clsbias = Acls_prop.matmul(torch.log(Abias_prop.t() + 1e-7)) + \
+              Abias_prop.matmul(torch.log(Acls_prop.t() + 1e-7))
+        A_clsbias = A_clsbias / 2
+
+        pos = A[mask]
+        pos_clsbias = A_clsbias[mask]
+        neg = A[~mask]
+        neg_clsbias = A_clsbias[~mask]
+        wpos = self.post
+        wneg = self.negt
+        loss_MI = torch.log(1 + torch.sum(torch.exp(-wpos * (1*pos_clsbias+pos)))) / wpos + torch.log(
+            1 + torch.sum(torch.exp(wneg * (1*neg_clsbias+neg)))) / wneg
+        if adv:
+            loss_advMI = - loss_MI
+        else:
+            loss_advMI = 0
+        return loss_MI, A, loss_advMI
 
 
 

@@ -9,25 +9,31 @@ import time
 import os
 import math
 from tqdm import tqdm
-from utils import logger_setting, printandlog, _num_correct, _accuracy
+from utils import logger_setting, printandlog, _num_correct_CelebA, _accuracy, _num_correct
 
 
 class Trainer(object):
     def __init__(self, option):
         self.option = option
-        logfilename = option.exp_name
-        self.save_dir = os.path.join(option.save_dir, option.exp_name, str(option.color_var))
-        self.logger = logger_setting(option.exp_name, self.save_dir, option.debug, logfilename)
-        self.logfilename = os.path.join(option.save_dir, option.exp_name, str(option.color_var))
-        self.feaExtractor = models.convnet().cuda()
+        # logfilename = option.exp_name
+        self.IMDB_train_mode = option.IMDB_train_mode
+        self.IMDB_test_mode = option.IMDB_test_mode
+        # self.save_dir = os.path.join(option.save_dir, option.exp_name, option.attributes[0], option.eval_mode)
+        self.save_dir = os.path.join(option.save_dir, option.exp_name, option.IMDB_train_mode, option.IMDB_test_mode)
+        # self.logger = logger_setting(option.exp_name, self.save_dir, option.debug, logfilename)
+        self.exp_dir = os.path.join(option.save_dir, option.exp_name)
+        self.feaExtractor = models.ResNet18(n_classes=1, pretrained=True).cuda() # n_classes is dummy
         self.biasDisentangle = models.disentangler().cuda()
         self.classDisentangle = models.disentangler().cuda()
-        self.biasPredictor = models.biasClassifier(option.n_class_bias).cuda()
+        self.biasPredictor = models.sexClassifier(option.n_class_bias).cuda()
         self.classPredictor = models.classifier(option.n_class).cuda()
         self.MI = models.MI(option).cuda()
         self.valiloader = None
-        self.bias_loss = nn.CrossEntropyLoss(ignore_index=255).cuda()
-        self.classification_loss = nn.CrossEntropyLoss(ignore_index=255).cuda()
+        if self.IMDB_train_mode.endswith('ex'):
+            self.bias_loss = nn.BCEWithLogitsLoss().cuda()
+        else:
+            self.bias_loss = nn.CrossEntropyLoss().cuda()
+        self.classification_loss = nn.BCEWithLogitsLoss().cuda()
 
         betad = (0.9, 0.999)
         self.betad = betad
@@ -93,9 +99,10 @@ class Trainer(object):
             # pretrain MI
             for i in range(2):
                 self._train_step_MI(data_loader)
+                # pass
 
         tbar = tqdm(data_loader)
-        for i, (images, _, labels, colorlabel) in enumerate(tbar):
+        for i, (images, labels, colorlabel) in enumerate(tbar):
             # Step 1: train feature extractor and target prediction branch
             images = self._get_variable(images)
             labels = self._get_variable(labels)
@@ -106,7 +113,7 @@ class Trainer(object):
             fea = self.feaExtractor(images)
             fea_cls_disentangle = self.classDisentangle(fea)
             pred_label = self.classPredictor(fea_cls_disentangle)
-            loss_pred = self.classification_loss(pred_label, torch.squeeze(labels))
+            loss_pred = self.classification_loss(pred_label, labels)
             loss_training = 1 * loss_pred  # maybe with mutual max entropy
             loss_training.backward()
             self.optim_feaextractor.step()
@@ -118,11 +125,11 @@ class Trainer(object):
                 self.optim_biasPredictor.zero_grad()
                 self.optim_biasDisentangle.zero_grad()
                 fea_bias_disentangle = self.biasDisentangle(fea.detach())
-                pred_r, pred_g, pred_b = self.biasPredictor(fea_bias_disentangle)
-                loss_pred_r = self.bias_loss(pred_r, torch.squeeze(colorlabel[:, 0]))
-                loss_pred_g = self.bias_loss(pred_g, torch.squeeze(colorlabel[:, 1]))
-                loss_pred_b = self.bias_loss(pred_b, torch.squeeze(colorlabel[:, 2]))
-                loss_pred_bias = (loss_pred_r + loss_pred_g + loss_pred_b) / 3
+                pred = self.biasPredictor(fea_bias_disentangle)
+                if self.IMDB_train_mode.endswith('ex'):
+                    loss_pred_bias = self.bias_loss(pred, colorlabel)
+                else:
+                    loss_pred_bias = self.bias_loss(pred, torch.squeeze(colorlabel))
                 loss = loss_pred_bias
                 loss.backward()
                 self.optim_biasPredictor.step()
@@ -154,7 +161,7 @@ class Trainer(object):
             tbar.set_description(msg)
 
     def _train_step_MI(self, data_loader, MaxIteration=1000):
-        for i, (images, _, labels, colorlabel) in enumerate(data_loader):
+        for i, (images, labels, colorlabel) in enumerate(data_loader):
             self.optim_MI.zero_grad()
             if i > MaxIteration:
                 return
@@ -165,6 +172,9 @@ class Trainer(object):
             fea_cls_disentangle = self.classDisentangle(fea).detach()
             fea_bias_disentangle = self.biasDisentangle(fea).detach()
 
+            # print(colorlabel)
+            # print(colorlabel.size())
+            # print('djklasjdlas')
             lossMI, A, _ = self.MI(fea_cls_disentangle, fea_bias_disentangle, labels, colorlabel)  # maximize MI
 
             loss = 1 * lossMI
@@ -189,10 +199,12 @@ class Trainer(object):
         self.optim_classPredictor = optim.Adam(self.classPredictor.parameters(), lr=lr, betas=self.betad,
                                                weight_decay=self.option.weight_decay)
         for i in range(20):
+        # for i in range(1):
             self._train_step_baseline(data_loader, i)
             self._validate(self.valiloader, i)
         print('baseline pretrain finished')
         for i in range(20):
+        # for i in range(1):
             self._train_step_color(data_loader, i)
             self._validate(self.valiloader, i)
         print('bias brach pretrain finished')
@@ -211,7 +223,7 @@ class Trainer(object):
                                                weight_decay=self.option.weight_decay)
 
     def _train_step_baseline(self, data_loader, step):
-        for i, (images, _, labels, colorlabel) in enumerate(data_loader):
+        for i, (images, labels, colorlabel) in enumerate(data_loader):
 
             images = self._get_variable(images)
             labels = self._get_variable(labels)
@@ -219,7 +231,7 @@ class Trainer(object):
             self._optim_zero_grad()
             pred_label = self.classPredictor(self.classDisentangle(self.feaExtractor(images)))
 
-            loss_pred = self.classification_loss(pred_label, torch.squeeze(labels))
+            loss_pred = self.classification_loss(pred_label, labels)
             loss_pred = loss_pred
             loss_pred.backward()
             self._optim_step()
@@ -229,7 +241,7 @@ class Trainer(object):
                 print(msg)
 
     def _train_step_color(self, data_loader, step):
-        for i, (images, _, labels, colorlabel) in enumerate(data_loader):
+        for i, (images, labels, colorlabel) in enumerate(data_loader):
             images = self._get_variable(images)
             labels = self._get_variable(labels)
             colorlabel = self._get_variable(colorlabel)
@@ -237,12 +249,22 @@ class Trainer(object):
             self.optim_biasDisentangle.zero_grad()
             self.optim_biasPredictor.zero_grad()
             fea = self.biasDisentangle(self.feaExtractor(images).detach())
-            pred_r, pred_g, pred_b = self.biasPredictor(fea)
+            # pred_r, pred_g, pred_b = self.biasPredictor(fea)
 
-            loss_pred_r = self.bias_loss(pred_r, torch.squeeze(colorlabel[:,0]))
-            loss_pred_g = self.bias_loss(pred_g, torch.squeeze(colorlabel[:,1]))
-            loss_pred_b = self.bias_loss(pred_b, torch.squeeze(colorlabel[:,2]))
-            loss_pred = (loss_pred_r+loss_pred_g+loss_pred_b)
+            # loss_pred_r = self.bias_loss(pred_r, torch.squeeze(colorlabel[:,0]))
+            # loss_pred_g = self.bias_loss(pred_g, torch.squeeze(colorlabel[:,1]))
+            # loss_pred_b = self.bias_loss(pred_b, torch.squeeze(colorlabel[:,2]))
+            # loss_pred = (loss_pred_r+loss_pred_g+loss_pred_b)
+            pred = self.biasPredictor(fea)
+            # print(pred)
+            # print(colorlabel)
+            # print(pred.size())
+            # print(colorlabel.size())
+            # print('dlasdj')
+            if self.IMDB_train_mode.endswith('ex'):
+                loss_pred = self.bias_loss(pred, colorlabel)
+            else:
+                loss_pred = self.bias_loss(pred, torch.squeeze(colorlabel))
             loss_pred.backward()
             self.optim_biasPredictor.step()
             self.optim_biasDisentangle.step()
@@ -259,41 +281,42 @@ class Trainer(object):
         total_num_correct_r = 0.
         total_num_correct_g = 0.
         total_num_correct_b = 0.
+        total_num_correct_bias = 0.
         total_num_test = 0.
         total_loss = 0.
         with torch.no_grad():
-            for i, (images, color_labels, labels, colorlabel) in enumerate(data_loader):
+            for i, (images, labels, colorlabel) in enumerate(data_loader):
                 start_time = time.time()
                 images = self._get_variable(images)
-                colro_labels = self._get_variable(color_labels)
+                # colro_labels = self._get_variable(color_labels)
                 labels = self._get_variable(labels)
                 colorlabel = self._get_variable(colorlabel)
 
                 pred_label = self.classPredictor(self.classDisentangle(self.feaExtractor(images)))
-                pred_label_r, pred_label_g, pred_label_b = self.biasPredictor(
-                    self.biasDisentangle(self.feaExtractor(images)))
-                loss = self.classification_loss(pred_label, torch.squeeze(labels))
+                # pred_label_r, pred_label_g, pred_label_b = self.biasPredictor(
+                #     self.biasDisentangle(self.feaExtractor(images)))
+                pred_label_bias = self.biasPredictor(self.biasDisentangle(self.feaExtractor(images)))
+                loss = self.classification_loss(pred_label, labels)
 
                 batch_size = images.shape[0]
-                total_num_correct += _num_correct(pred_label, labels, topk=1).item()
-                total_num_correct_r += _num_correct(pred_label_r, colorlabel[:, 0], topk=1).item()
-                total_num_correct_g += _num_correct(pred_label_g, colorlabel[:, 1], topk=1).item()
-                total_num_correct_b += _num_correct(pred_label_b, colorlabel[:, 2], topk=1).item()
+                total_num_correct += _num_correct_CelebA(pred_label, labels).item()
+                if self.IMDB_train_mode.endswith('ex'):
+                    total_num_correct_bias += _num_correct_CelebA(pred_label_bias, colorlabel).item()
+                else:
+                    total_num_correct_bias += _num_correct(pred_label_bias, colorlabel).item()
                 total_loss += loss.item() * batch_size
                 total_num_test += batch_size
 
         avg_loss = total_loss / total_num_test
         avg_acc = total_num_correct / total_num_test
-        avg_acc_r = total_num_correct_r / total_num_test
-        avg_acc_g = total_num_correct_g / total_num_test
-        avg_acc_b = total_num_correct_b / total_num_test
-        msg = "Epoch: %d EVALUATION LOSS  %.4f, ACCURACY : %.4f (%d/%d); ACC_r : %.4f ACC_g : %.4f; ACC_b : %.4f" % \
-              (epoch, avg_loss, avg_acc, int(total_num_correct), total_num_test, avg_acc_r, avg_acc_g, avg_acc_b)
-        printandlog(msg, self.logfilename)
+        avg_acc_bias = total_num_correct_bias / total_num_test
+        msg = "Epoch: %d EVALUATION LOSS  %.4f, ACCURACY : %.4f (%d/%d); Acc_bias: %.4f" % \
+              (epoch, avg_loss, avg_acc, int(total_num_correct), total_num_test, avg_acc_bias)
+        printandlog(msg, self.save_dir)
         return avg_acc
 
     def _save_model(self, step, prefix=''):
-        filename = os.path.join(self.option.save_dir, self.option.exp_name, str(self.option.color_var), prefix+'checkpoint_step_%04d.pth' % step)
+        filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.IMDB_train_mode, self.option.IMDB_test_mode, prefix+'checkpoint_step_%04d.pth' % step)
         torch.save({
             'step': step,
             'feaExtractor': self.feaExtractor.state_dict(),
@@ -334,7 +357,7 @@ class Trainer(object):
             self._save_model(step=0, prefix='pretrain')
 
         start_epoch = 0
-        printandlog('start training', self.logfilename)
+        printandlog('start training', self.save_dir)
 
         # check baseline performance
         print('performance before current training')
@@ -348,8 +371,20 @@ class Trainer(object):
             if step == 0 or step % self.option.save_step == 0 or step == (self.option.max_step - 1):
                 if val_loader is not None:
                     acc = self._validate(val_loader, step)
+                    # if not math.isnan(acc):
+                    final_acc = acc
 
             self._save_model(step)
+
+        import datetime
+        import utils
+        data = {
+            'Time': [datetime.datetime.now()],
+            'Train': [self.IMDB_train_mode],
+            'Test': [self.IMDB_test_mode],
+            'CSAD': [final_acc * 100]
+            }
+        utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'IMDB_CSAD_trials.csv'))
 
     def _get_variable(self, inputs):
         if self.option.cuda:

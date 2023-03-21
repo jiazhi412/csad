@@ -10,9 +10,12 @@ if not os.path.exists('errors'):
 
 # parameters
 command_template = 'python main_CelebA.py --exp_name {}  --attr {} --eval_mode {} --alpha {} --tau {} --lambda_ {}'
-p1 = ['CelebA_paper']
+p1 = ['CelebA_CSAD_paper']
 p2 = ['Heavy_Makeup', 'Blond_Hair']
-p3 = ['unbiased', 'conflict', 'unbiased_ex', 'conflict_ex', 'conflict_pp', 'conflict_pp_ex']
+# p2 = ['Heavy_Makeup']
+p3 = ['unbiased', 'conflict', 'unbiased_ex', 'conflict_ex']
+# p3 = ['unbiased', 'conflict', 'unbiased_ex', 'conflict_ex', 'conflict_pp', 'conflict_pp_ex']
+# p3 = ['unbiased']
 p4 = [1]
 p5 = [10]
 p6 = [1]
@@ -27,17 +30,20 @@ for p1, p2, p3, p4, p5, p6 in product(p1, p2, p3, p4, p5, p6):
         OUT.write('#SBATCH --ntasks=1 \n')
         OUT.write('#SBATCH --account=other \n')
         OUT.write('#SBATCH --qos=premium \n')
+        # OUT.write('#SBATCH --qos=flexible \n')
         OUT.write('#SBATCH --partition=ALL \n')
         OUT.write('#SBATCH --cpus-per-task=4 \n')
         OUT.write('#SBATCH --gres=gpu:1 \n')
         OUT.write('#SBATCH --mem=16G \n')
         OUT.write('#SBATCH --time=5-00:00:00 \n')
-        OUT.write('#SBATCH --exclude=vista[06,07,10,11,13,17-20] \n')
         # OUT.write('#SBATCH --exclude=vista18 \n')
+        OUT.write('#SBATCH --exclude=vista[05,06,07,10,11,13,17-20] \n')
         OUT.write('#SBATCH --output=outputs/{}.out \n'.format(job_name))
         OUT.write('#SBATCH --error=errors/{}.out \n'.format(job_name))
         OUT.write('source ~/.bashrc\n')
-        OUT.write('conda activate vae\n')
+        OUT.write('echo $HOSTNAME\n')
+        OUT.write('echo "total gpu resources allocated: "$CUDA_VISIBLE_DEVICES\n')
+        OUT.write('conda activate pytorch\n')
         OUT.write(command)
 
     qsub_command = 'sbatch {}'.format(bash_file)

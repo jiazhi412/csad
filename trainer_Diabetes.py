@@ -3,32 +3,54 @@ import torch
 from torch import nn
 from torch import optim
 from torch.autograd import Variable
-import models as models
+import models
 import numpy as np
 import time
 import os
 import math
 from tqdm import tqdm
-from utils import logger_setting, printandlog, _num_correct_CelebA, _accuracy
+from utils import logger_setting, printandlog, _num_correct_CelebA, _accuracy, _num_correct
 
 
 class Trainer(object):
     def __init__(self, option):
         self.option = option
-        # logfilename = option.exp_name
-        self.attr = option.attributes[0]
-        self.eval_mode = option.eval_mode
-        self.save_dir = os.path.join(option.save_dir, option.exp_name, option.attributes[0], option.eval_mode)
-        # self.logger = logger_setting(option.exp_name, self.save_dir, option.debug, logfilename)
+        self.Diabetes_train_mode = option.Diabetes_train_mode
+        self.Diabetes_test_mode = option.Diabetes_test_mode
+        self.save_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
         self.exp_dir = os.path.join(option.save_dir, option.exp_name)
-        self.feaExtractor = models.ResNet18(n_classes=1, pretrained=True).cuda()
-        self.biasDisentangle = models.disentangler().cuda()
-        self.classDisentangle = models.disentangler().cuda()
-        self.biasPredictor = models.sexClassifier(option.n_class_bias).cuda()
-        self.classPredictor = models.classifier(option.n_class).cuda()
-        self.MI = models.MI(option).cuda()
+
+        in_dim = 8
+        # hidden_dims = [84, 10]
+        hidden_dims = [64]
+        out_dim = 1
+        self.feaExtractor = models.MLP(in_dim, [], 64).cuda()
+        self.biasDisentangle = models.MLP(64, [], 64).cuda()
+        self.classDisentangle = models.MLP(64, [], 64).cuda()
+        self.biasPredictor = models.MLP(64, [], option.n_class_bias).cuda()
+        self.classPredictor = models.MLP(64, [], option.n_class).cuda()
+
+        
+
+
+        # self.feaExtractor = models.ResNet18(n_classes=1, pretrained=True).cuda() # n_classes is dummy
+        # self.biasDisentangle = models.disentangler().cuda()
+        # self.classDisentangle = models.disentangler().cuda()
+        # self.biasPredictor = models.sexClassifier(option.n_class_bias).cuda()
+        # self.classPredictor = models.classifier(option.n_class).cuda()
+        self.MI = models.MI_s(option).cuda()
+
+        
+        
+        
+        
+
         self.valiloader = None
-        self.bias_loss = nn.BCEWithLogitsLoss().cuda()
+        self.bias_loss = nn.MSELoss().cuda()
+        # if self.Diabetes_train_mode.endswith('ex'):
+        #     self.bias_loss = nn.BCEWithLogitsLoss().cuda()
+        # else:
+        #     self.bias_loss = nn.CrossEntropyLoss().cuda()
         self.classification_loss = nn.BCEWithLogitsLoss().cuda()
 
         betad = (0.9, 0.999)
@@ -121,13 +143,11 @@ class Trainer(object):
                 self.optim_biasPredictor.zero_grad()
                 self.optim_biasDisentangle.zero_grad()
                 fea_bias_disentangle = self.biasDisentangle(fea.detach())
-                # pred_r, pred_g, pred_b = self.biasPredictor(fea_bias_disentangle)
-                # loss_pred_r = self.bias_loss(pred_r, torch.squeeze(colorlabel[:, 0]))
-                # loss_pred_g = self.bias_loss(pred_g, torch.squeeze(colorlabel[:, 1]))
-                # loss_pred_b = self.bias_loss(pred_b, torch.squeeze(colorlabel[:, 2]))
-                # loss_pred_bias = (loss_pred_r + loss_pred_g + loss_pred_b) / 3
                 pred = self.biasPredictor(fea_bias_disentangle)
-                loss_pred_bias = self.bias_loss(pred, colorlabel)
+                if self.Diabetes_train_mode.endswith('ex'):
+                    loss_pred_bias = self.bias_loss(pred, colorlabel)
+                else:
+                    loss_pred_bias = self.bias_loss(pred, torch.squeeze(colorlabel))
                 loss = loss_pred_bias
                 loss.backward()
                 self.optim_biasPredictor.step()
@@ -254,7 +274,15 @@ class Trainer(object):
             # loss_pred_b = self.bias_loss(pred_b, torch.squeeze(colorlabel[:,2]))
             # loss_pred = (loss_pred_r+loss_pred_g+loss_pred_b)
             pred = self.biasPredictor(fea)
-            loss_pred = self.bias_loss(pred, colorlabel)
+            # print(pred)
+            # print(colorlabel)
+            # print(pred.size())
+            # print(colorlabel.size())
+            # print('dlasdj')
+            if self.Diabetes_train_mode.endswith('ex'):
+                loss_pred = self.bias_loss(pred, colorlabel)
+            else:
+                loss_pred = self.bias_loss(pred, torch.squeeze(colorlabel))
             loss_pred.backward()
             self.optim_biasPredictor.step()
             self.optim_biasDisentangle.step()
@@ -290,28 +318,23 @@ class Trainer(object):
 
                 batch_size = images.shape[0]
                 total_num_correct += _num_correct_CelebA(pred_label, labels).item()
-                # total_num_correct_r += _num_correct(pred_label_r, colorlabel[:, 0], topk=1).item()
-                # total_num_correct_g += _num_correct(pred_label_g, colorlabel[:, 1], topk=1).item()
-                # total_num_correct_b += _num_correct(pred_label_b, colorlabel[:, 2], topk=1).item()
-                total_num_correct_bias += _num_correct_CelebA(pred_label_bias, colorlabel).item()
+                if self.Diabetes_train_mode.endswith('ex'):
+                    total_num_correct_bias += _num_correct_CelebA(pred_label_bias, colorlabel).item()
+                else:
+                    total_num_correct_bias += _num_correct(pred_label_bias, colorlabel).item()
                 total_loss += loss.item() * batch_size
                 total_num_test += batch_size
 
         avg_loss = total_loss / total_num_test
         avg_acc = total_num_correct / total_num_test
-        # avg_acc_r = total_num_correct_r / total_num_test
-        # avg_acc_g = total_num_correct_g / total_num_test
-        # avg_acc_b = total_num_correct_b / total_num_test
         avg_acc_bias = total_num_correct_bias / total_num_test
-        # msg = "Epoch: %d EVALUATION LOSS  %.4f, ACCURACY : %.4f (%d/%d); ACC_r : %.4f ACC_g : %.4f; ACC_b : %.4f" % \
-        #       (epoch, avg_loss, avg_acc, int(total_num_correct), total_num_test, avg_acc_r, avg_acc_g, avg_acc_b)
         msg = "Epoch: %d EVALUATION LOSS  %.4f, ACCURACY : %.4f (%d/%d); Acc_bias: %.4f" % \
               (epoch, avg_loss, avg_acc, int(total_num_correct), total_num_test, avg_acc_bias)
         printandlog(msg, self.save_dir)
         return avg_acc
 
     def _save_model(self, step, prefix=''):
-        filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.attributes[0], self.option.eval_mode, prefix+'checkpoint_step_%04d.pth' % step)
+        filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.Diabetes_train_mode, self.option.Diabetes_test_mode, prefix+'checkpoint_step_%04d.pth' % step)
         torch.save({
             'step': step,
             'feaExtractor': self.feaExtractor.state_dict(),
@@ -375,11 +398,11 @@ class Trainer(object):
         import utils
         data = {
             'Time': [datetime.datetime.now()],
-            'Attr': [self.attr],
-            'Eval Mode': [self.eval_mode],
+            'Train': [self.Diabetes_train_mode],
+            'Test': [self.Diabetes_test_mode],
             'CSAD': [final_acc * 100]
             }
-        utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'CelebA_CSAD_trials.csv'))
+        utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'Diabetes_CSAD_trials.csv'))
 
     def _get_variable(self, inputs):
         if self.option.cuda:

@@ -4,9 +4,15 @@ import json
 import time
 import logging
 import torch
+import pandas as pd
 
 
-
+def append_data_to_csv(data,csv_name):
+    df = pd.DataFrame(data)
+    if os.path.exists(csv_name):
+        df.to_csv(csv_name,mode='a',index=False,header=False)
+    else:
+        df.to_csv(csv_name,index=False)
 
 def save_option(option):
     option_path = os.path.join(option.save_dir, option.exp_name, str(option.color_var), "options.json")
@@ -16,6 +22,30 @@ def save_option(option):
 
 def save_option_CelebA(option):
     option_path = os.path.join(option.save_dir, option.exp_name, option.attributes[0], option.eval_mode, "options.json")
+
+    with open(option_path, 'w') as fp:
+        json.dump(option.__dict__, fp, indent=4, sort_keys=True)
+
+def save_option_IMDB(option):
+    option_path = os.path.join(option.save_dir, option.exp_name, option.IMDB_train_mode, option.IMDB_test_mode, "options.json")
+
+    with open(option_path, 'w') as fp:
+        json.dump(option.__dict__, fp, indent=4, sort_keys=True)
+
+def save_option_German(option):
+    option_path = os.path.join(option.save_dir, option.exp_name, option.German_train_mode, option.German_test_mode, "options.json")
+
+    with open(option_path, 'w') as fp:
+        json.dump(option.__dict__, fp, indent=4, sort_keys=True)
+
+def save_option_Diabetes(option):
+    option_path = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode, "options.json")
+
+    with open(option_path, 'w') as fp:
+        json.dump(option.__dict__, fp, indent=4, sort_keys=True)
+
+def save_option_Adult(option):
+    option_path = os.path.join(option.save_dir, option.exp_name, option.Adult_train_mode, option.Adult_test_mode, "options.json")
 
     with open(option_path, 'w') as fp:
         json.dump(option.__dict__, fp, indent=4, sort_keys=True)
@@ -43,7 +73,7 @@ def logger_setting(exp_name, save_dir, debug, filename='train.log'):
 
 def printandlog(str1, savefilepath):
     print(str1)
-    with open(savefilepath + '.txt', 'a+') as f:
+    with open(os.path.join(savefilepath, 'log.txt'), 'a+') as f:
         f.write(str1)
         f.write('\n')
 
@@ -56,13 +86,11 @@ def _num_correct(outputs, labels, topk=1):
     return correct
 
 def _num_correct_CelebA(outputs, labels):
-    # _, preds = outputs.topk(k=topk, dim=1)
-    # preds = preds.t()
     preds = torch.sigmoid(outputs)
-    # print(preds)
-    # print(preds.round())
-    # print('djklasjd')
-    correct = (preds.round() == labels).view(-1).sum()
+    # print(preds.size())
+    # print(labels.size())
+    # print('djsladjad')
+    correct = (preds.round().view(-1) == labels.view(-1)).sum()
     # print(correct)
     return correct
 
@@ -102,7 +130,7 @@ def CelebA_eval_mode(key_list, target_dict, sex_dict, mode, train_or_test):
     if train_or_test == 'test' or train_or_test == 'dev':
         if mode.startswith('unbiased'):
             r_key_list = pp[:m] + pn[:m] + np[:m] + nn[:m]
-        elif mode.startswith('conflict'):
+        elif mode.startswith('conflict') and not mode.startswith('conflict_pp'):
             r_key_list = pp[:m] + nn[:m]
         elif mode.startswith('conflict_pp'):
             r_key_list = pp

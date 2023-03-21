@@ -4,19 +4,17 @@ from torch.backends import cudnn
 
 import os
 import random
-from trainer_CelebA import Trainer
-from utils import save_option_CelebA
+from trainer_IMDB import Trainer
+from utils import save_option_IMDB
 import argparse
-import torch.utils.data as data
-from dataloader.CelebA import CelebADataset
+from dataloader.IMDB import IMDBDataset 
 import utils
-import numpy as np
 import h5py
 # import warnings
 # warnings.filterwarnings("ignore")
 
 def backend_setting(option):
-    log_dir = os.path.join(option.save_dir, option.exp_name, option.attributes[0], option.eval_mode)
+    log_dir = os.path.join(option.save_dir, option.exp_name, option.IMDB_train_mode, option.IMDB_test_mode)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -88,57 +86,56 @@ def main():
     # parser.add_argument("--filter", type=str, default='attGAN')
     parser.add_argument("--eval_mode", type=str, default='unbiased')
 
+    ## IMDB
+    parser.add_argument("--IMDB_train_mode", type=str, default='eb1')
+    parser.add_argument("--IMDB_test_mode", type=str, default='unbiased')
+
     torch.set_num_threads(1)
     option = parser.parse_args()
+    # extreme bias n_class_bias
+    if option.IMDB_train_mode.endswith('ex'):
+        option.n_class_bias = 1
+    else:
+        option.n_class_bias = 12
+     
     print(option)
     backend_setting(option)
     trainer = Trainer(option)
 
     # get loader 
     data_folder = {
-            'origin_image_feature_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/CelebA.h5py',
-            'origin_target_dict_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/labels_dict',
-            'origin_sex_dict_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/sex_dict',
-            'origin_train_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/train_key_list',
-            'origin_dev_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/dev_key_list',
-            'origin_test_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/test_key_list',
-            'subclass_idx_path': '/nas/vista-ssd01/users/jiazli/datasets/CelebA/processed_data/subclass_idx',
+            'origin_image_feature_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/IMDB.h5py',
+            'origin_target_dict_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/age_dict',
+            'origin_sex_dict_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/sex_dict',
+            'origin_eb1_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/eb1_img_list',
+            'origin_eb2_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/eb2_img_list',
+            'origin_unbiased_key_list_path': '/nas/vista-ssd01/users/jiazli/datasets/IMDB/processed_data/test_img_list',
             'augment': False
         }
+
     image_feature = h5py.File(data_folder['origin_image_feature_path'], 'r')
     target_dict = utils.load_pkl(data_folder['origin_target_dict_path'])
     sex_dict = utils.load_pkl(data_folder['origin_sex_dict_path'])
-    train_key_list = utils.load_pkl(data_folder['origin_train_key_list_path'])
-    dev_key_list = utils.load_pkl(data_folder['origin_dev_key_list_path'])
-    test_key_list = utils.load_pkl(data_folder['origin_test_key_list_path'])
-        
-    attribute_list = utils.get_attr_index(option.attributes) 
-    target_dict = utils.transfer_origin_for_testing_only(target_dict, attribute_list)
-
-    # modify dev and test to unbiased and bias conflict 
-    train_key_list = utils.CelebA_eval_mode(train_key_list, target_dict, sex_dict, mode = option.eval_mode, train_or_test='train')
-    dev_key_list = utils.CelebA_eval_mode(dev_key_list, target_dict, sex_dict, mode = option.eval_mode, train_or_test='dev')
-    test_key_list = utils.CelebA_eval_mode(test_key_list, target_dict, sex_dict, mode = option.eval_mode, train_or_test='test')
+    eb1_key_list = utils.load_pkl(data_folder['origin_eb1_key_list_path'])
+    eb2_key_list = utils.load_pkl(data_folder['origin_eb2_key_list_path'])
+    unbiased_key_list = utils.load_pkl(data_folder['origin_unbiased_key_list_path'])
 
     import torchvision.transforms as transforms
     transform_train = transforms.Compose([
-                                        transforms.CenterCrop(148),
+                                        transforms.Resize((224,224)),
+                                        transforms.CenterCrop(180),
                                         transforms.Resize((224,224)),
                                         transforms.ToTensor(),
-                                        # normalize,
-                                        ])
-    train_set = CelebADataset(train_key_list, image_feature, target_dict, sex_dict, transform_train)
-    dev_set = CelebADataset(dev_key_list, image_feature, target_dict, sex_dict, transform_train)
-    test_set = CelebADataset(test_key_list, image_feature, target_dict, sex_dict, transform_train)
+                        # normalize,
+                        ])
+    train_set = IMDBDataset(image_feature, target_dict, sex_dict, option.IMDB_train_mode, eb1_key_list, eb2_key_list, unbiased_key_list, 'train', transform_train)
+    dev_set = IMDBDataset(image_feature, target_dict, sex_dict, option.IMDB_test_mode, eb1_key_list, eb2_key_list, unbiased_key_list, 'dev_test', transform_train)
 
-    trainval_loader = torch.utils.data.DataLoader(train_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    trainval_loader = torch.utils.data.DataLoader(train_set, batch_size=option.batch_size, shuffle=True, num_workers=4, drop_last=True, pin_memory=True)
     dev_loader = torch.utils.data.DataLoader(dev_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    testloader = torch.utils.data.DataLoader(test_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-
-    
 
     if option.is_train == 1:
-        save_option_CelebA(option)
+        save_option_IMDB(option)
         trainer.train(trainval_loader, dev_loader)
         # trainer.train(trainval_loader, testloader)
     else:

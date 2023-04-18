@@ -7,10 +7,8 @@ import random
 from trainer_CelebA import Trainer
 from utils import save_option_CelebA
 import argparse
-import torch.utils.data as data
 from dataloader.CelebA import CelebADataset
 import utils
-import numpy as np
 import h5py
 # import warnings
 # warnings.filterwarnings("ignore")
@@ -133,16 +131,14 @@ def main():
 
     trainval_loader = torch.utils.data.DataLoader(train_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
     dev_loader = torch.utils.data.DataLoader(dev_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    testloader = torch.utils.data.DataLoader(test_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     
 
     if option.is_train == 1:
         save_option_CelebA(option)
         trainer.train(trainval_loader, dev_loader)
-        # trainer.train(trainval_loader, testloader)
     else:
-        trainer._validate(trainval_loader)
-        pass
+        trainer._validate(test_loader)
 
 if __name__ == '__main__': main()

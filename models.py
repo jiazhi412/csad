@@ -23,21 +23,29 @@ def weights_init_kaiming(m):
         init.constant(m.bias.data, 0.0)
 
 class MLP(nn.Module):
-    def __init__(self, in_dim, hidden_dims, out_dim):
+    def __init__(self, in_dim, hidden_dims, out_dim, is_logits=True):
         super().__init__()
         layers = []
         for dim in hidden_dims:
             layers.append(nn.Linear(in_dim, dim))
+            layers.append(nn.BatchNorm1d(dim))
             layers.append(nn.ReLU())
             in_dim = dim
         self.layers = nn.Sequential(*layers)
         self.out = nn.Linear(in_dim, out_dim)
+        self.is_logits = is_logits
+        if not is_logits:
+            self.bn = nn.BatchNorm1d(out_dim)
+            self.relu = nn.ReLU()
 
     def forward(self, x):
         if len(x.size()) > 2:
             x = x.view(x.size(0), -1)
         x = self.layers(x)
-        return self.out(x)
+        x = self.out(x)
+        if not self.is_logits:
+            x = self.bn(self.relu(x))
+        return x
 
 class ResNet18(nn.Module):    
     def __init__(self, n_classes, pretrained, hidden_size=1024, dropout=0.5):
@@ -180,11 +188,13 @@ class MI_s(nn.Module):
 
         # self.fc1_cls = nn.Linear(128, 128)
         # self.fc2_cls = nn.Linear(128, 64)
-        self.fc3_cls = nn.Linear(64, 64)
+        # self.fc3_cls = nn.Linear(64, 64)
+        self.fc3_cls = nn.Linear(32, 32)
 
         # self.fc1_bias = nn.Linear(128, 128)
         # self.fc2_bias = nn.Linear(128, 64)
-        self.fc3_bias = nn.Linear(64, 64)
+        # self.fc3_bias = nn.Linear(64, 64)
+        self.fc3_bias = nn.Linear(32, 32)
 
         for m in self.children():
             weights_init_kaiming(m)

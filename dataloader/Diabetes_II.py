@@ -4,35 +4,51 @@ import numpy as np
 import dataloader.Diabetes_data_utils as utils
 import random
 
-class DiabetesDataset_I(Dataset):
-    def __init__(self, path, quick_load, bias_attr, middle_age, mode='train', train_ratio=0.8, balance=False, minority='young', minority_size=100, idx=None):
+class DiabetesDataset_II(Dataset):
+    def __init__(self, path, quick_load, bias_attr, middle_age, mode, idx=None):
         self.bias_attr = bias_attr
         self.features, self.labels_onehotv, self.bias_onehotv = self._load_data(path, quick_load)
         self.labels = self._onehotvector_to_label(self.labels_onehotv)
         self.bias = self.bias_onehotv
+        self.idx = None
 
-        np, nn, pp, pn = utils.split_by_age(self.features, self.labels, self.bias, middle_age)
-        if mode == 'train':
-            np, nn, pp, pn = random.sample(np, int(len(np)*train_ratio)), random.sample(nn, int(len(nn)*train_ratio)), random.sample(pp, int(len(pp)*train_ratio)), random.sample(pn, int(len(pn)*train_ratio))
-        elif mode == 'test':
-            np = list(set(np) - set(idx[0]))
-            nn = list(set(nn) - set(idx[1]))
-            pp = list(set(pp) - set(idx[2]))
-            pn = list(set(pn) - set(idx[3]))
-        self.idx = [np, nn, pp, pn]
-        
         # print('Note', 'YoungP', 'YoungN', 'OldP', 'OldN')
-        # YoungP -> NP
+        np, nn, pp, pn = utils.split_by_age(self.features, self.labels, self.bias, middle_age)
+
+        moderate_size = 20
+        if "moderate" in mode and idx != None:
+            if mode == 'eb1_moderate':
+                np = list(set(np) - set(idx[0]))
+                pn = list(set(pn) - set(idx[3]))
+            if mode == 'eb2_moderate':
+                nn = list(set(nn) - set(idx[1]))
+                pp = list(set(pp) - set(idx[2]))
         m = min(len(pp), len(pn), len(np), len(nn))
         print('Inpu', len(np), len(nn), len(pp), len(pn))
-        if balance:
-            np, nn, pp, pn = random.sample(np, m), random.sample(nn, m), random.sample(pp, m), random.sample(pn, m)
-        if minority == "young":
-            self._sift(pp + pn + random.sample(np, minority_size//2) + random.sample(nn, minority_size//2))
-        elif minority == "old":
-            self._sift(np + nn + random.sample(pp, minority_size//2) + random.sample(pn, minority_size//2))
-        elif minority == None:
-            self._sift(np + nn + pp + pn)
+        if mode == 'eb1':
+            self._sift(pp+nn)
+        elif mode == 'eb2':
+            self._sift(np+pn)
+        elif mode == 'eb1_balanced':
+            self._sift(random.sample(pp, m) + random.sample(nn, m))
+        elif mode == 'eb2_balanced':
+            self._sift(random.sample(np, m) + random.sample(pn, m))
+        elif mode == 'balanced':
+            self._sift(random.sample(np, m) + random.sample(pn, m) + random.sample(pp, m) + random.sample(nn, m))
+        elif mode == 'eb1_moderate':
+            nn = random.sample(nn, len(nn)-moderate_size)
+            pp = random.sample(pp, len(pp)-moderate_size)
+            np = random.sample(np, moderate_size)
+            pn = random.sample(pn, moderate_size)
+            self._sift(pp+nn+np+pn)
+            self.idx = [np, nn, pp, pn]
+        elif mode == 'eb2_moderate':
+            np = random.sample(np, len(np)-moderate_size)
+            pn = random.sample(pn, len(pn)-moderate_size)
+            nn = random.sample(nn, moderate_size)
+            pp = random.sample(pp, moderate_size)
+            self._sift(pp+nn+np+pn)
+            self.idx = [np, nn, pp, pn]
         np, nn, pp, pn = utils.split_by_age(self.features, self.labels, self.bias, middle_age)
         print('Outp', len(np), len(nn), len(pp), len(pn))
 
@@ -40,7 +56,6 @@ class DiabetesDataset_I(Dataset):
         feature = self.features[i]
         label = np.array(self.labels[i])
         bias = self.bias[i]
-        # return feature, label.float(), bias.float()
         return feature, label, bias
 
     def __len__(self):

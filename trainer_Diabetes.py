@@ -8,31 +8,40 @@ import time
 import os
 from tqdm import tqdm
 from utils import logger_setting, printandlog, _num_correct_CelebA, _accuracy, _num_correct
+import datetime
+import utils
 
 
 class Trainer(object):
     def __init__(self, option):
         self.option = option
-        self.Diabetes_train_mode = option.Diabetes_train_mode
-        self.Diabetes_test_mode = option.Diabetes_test_mode
-        self.save_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
+        self.opt = vars(self.option)
+        if option.bias_type == "I":
+            self.save_dir = os.path.join(option.save_dir, option.exp_name, option.minority, str(option.minority_size))
+        elif option.bias_type == "II":
+            self.save_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
         self.exp_dir = os.path.join(option.save_dir, option.exp_name)
 
         # set network
         in_dim = 8
-        # hidden_dims = [84, 10]
-        hidden_dims = [64]
-        out_dim = 1
-        self.feaExtractor = models.MLP(in_dim, [], 64).cuda()
-        self.biasDisentangle = models.MLP(64, [], 64).cuda()
-        self.classDisentangle = models.MLP(64, [], 64).cuda()
-        self.biasPredictor = models.MLP(64, [], option.n_class_bias).cuda()
-        self.classPredictor = models.MLP(64, [], option.n_class).cuda()
+        # hidden_dims = [64]
+        # self.feaExtractor = models.MLP(in_dim, [], 64).cuda()
+        # self.biasDisentangle = models.MLP(64, [], 64).cuda()
+        # self.classDisentangle = models.MLP(64, [], 64).cuda()
+        # self.biasPredictor = models.MLP(64, [], option.n_class_bias).cuda()
+        # self.classPredictor = models.MLP(64, [], option.n_class).cuda()
+
+        hidden_dims = [32, 10]
+        self.feaExtractor = models.MLP(in_dim, [], hidden_dims[0], is_logits=False).cuda()
+        self.biasDisentangle = models.MLP(hidden_dims[0], [], hidden_dims[0], is_logits=False).cuda()
+        self.classDisentangle = models.MLP(hidden_dims[0], [], hidden_dims[0], is_logits=False).cuda()
+        self.biasPredictor = models.MLP(hidden_dims[0], [hidden_dims[1]], self.option.n_class_bias).cuda()
+        self.classPredictor = models.MLP(hidden_dims[0], [hidden_dims[1]], self.option.n_class).cuda()
         self.MI = models.MI_s(option).cuda()
 
         # set loss function
         self.valiloader = None
-        self.bias_loss = nn.MSELoss().cuda()
+        self.bias_loss = nn.BCEWithLogitsLoss().cuda()
         self.classification_loss = nn.BCEWithLogitsLoss().cuda()
 
         # set optim
@@ -113,7 +122,7 @@ class Trainer(object):
             fea = self.feaExtractor(images)
             fea_cls_disentangle = self.classDisentangle(fea)
             pred_label = self.classPredictor(fea_cls_disentangle)
-            loss_pred = self.classification_loss(pred_label, labels)
+            loss_pred = self.classification_loss(pred_label, labels.float())
             loss_training = 1 * loss_pred  # maybe with mutual max entropy
             loss_training.backward()
             self.optim_feaextractor.step()
@@ -126,10 +135,7 @@ class Trainer(object):
                 self.optim_biasDisentangle.zero_grad()
                 fea_bias_disentangle = self.biasDisentangle(fea.detach())
                 pred = self.biasPredictor(fea_bias_disentangle)
-                if self.Diabetes_train_mode.endswith('ex'):
-                    loss_pred_bias = self.bias_loss(pred, colorlabel)
-                else:
-                    loss_pred_bias = self.bias_loss(pred, torch.squeeze(colorlabel))
+                loss_pred_bias = self.bias_loss(pred, colorlabel)
                 loss = loss_pred_bias
                 loss.backward()
                 self.optim_biasPredictor.step()
@@ -231,7 +237,7 @@ class Trainer(object):
             self._optim_zero_grad()
             pred_label = self.classPredictor(self.classDisentangle(self.feaExtractor(images)))
 
-            loss_pred = self.classification_loss(pred_label, labels)
+            loss_pred = self.classification_loss(pred_label, labels.float())
             loss_pred = loss_pred
             loss_pred.backward()
             self._optim_step()
@@ -261,10 +267,7 @@ class Trainer(object):
             # print(pred.size())
             # print(colorlabel.size())
             # print('dlasdj')
-            if self.Diabetes_train_mode.endswith('ex'):
-                loss_pred = self.bias_loss(pred, colorlabel)
-            else:
-                loss_pred = self.bias_loss(pred, torch.squeeze(colorlabel))
+            loss_pred = self.bias_loss(pred, colorlabel)
             loss_pred.backward()
             self.optim_biasPredictor.step()
             self.optim_biasDisentangle.step()
@@ -278,45 +281,48 @@ class Trainer(object):
     def _validate(self, data_loader, epoch):
         self._mode_setting(is_train=False)
         total_num_correct = 0.
-        total_num_correct_r = 0.
-        total_num_correct_g = 0.
-        total_num_correct_b = 0.
         total_num_correct_bias = 0.
         total_num_test = 0.
         total_loss = 0.
+        output_list = []
+        target_list = []
+        a_list = []
         with torch.no_grad():
             for i, (images, labels, colorlabel) in enumerate(data_loader):
                 start_time = time.time()
                 images = self._get_variable(images)
-                # colro_labels = self._get_variable(color_labels)
                 labels = self._get_variable(labels)
                 colorlabel = self._get_variable(colorlabel)
 
                 pred_label = self.classPredictor(self.classDisentangle(self.feaExtractor(images)))
-                # pred_label_r, pred_label_g, pred_label_b = self.biasPredictor(
-                #     self.biasDisentangle(self.feaExtractor(images)))
                 pred_label_bias = self.biasPredictor(self.biasDisentangle(self.feaExtractor(images)))
-                loss = self.classification_loss(pred_label, labels)
+                loss = self.classification_loss(pred_label, labels.float())
 
                 batch_size = images.shape[0]
                 total_num_correct += _num_correct_CelebA(pred_label, labels).item()
-                if self.Diabetes_train_mode.endswith('ex'):
-                    total_num_correct_bias += _num_correct_CelebA(pred_label_bias, colorlabel).item()
-                else:
-                    total_num_correct_bias += _num_correct(pred_label_bias, colorlabel).item()
+                total_num_correct_bias += _num_correct(pred_label_bias, colorlabel).item()
                 total_loss += loss.item() * batch_size
                 total_num_test += batch_size
 
+                output_list.append(pred_label)
+                target_list.append(labels)
+                a_list.append(colorlabel)
+        test_output, test_target, test_a = torch.cat(output_list), torch.cat(target_list), torch.cat(a_list)
+        test_acc_p, test_acc_n = utils.compute_subAcc_withlogits_binary(test_output, test_target, test_a)
+        D = test_acc_p - test_acc_n
         avg_loss = total_loss / total_num_test
         avg_acc = total_num_correct / total_num_test
         avg_acc_bias = total_num_correct_bias / total_num_test
         msg = "Epoch: %d EVALUATION LOSS  %.4f, ACCURACY : %.4f (%d/%d); Acc_bias: %.4f" % \
               (epoch, avg_loss, avg_acc, int(total_num_correct), total_num_test, avg_acc_bias)
         printandlog(msg, self.save_dir)
-        return avg_acc
+        return avg_acc, test_acc_p, test_acc_n, D
 
     def _save_model(self, step, prefix=''):
-        filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.Diabetes_train_mode, self.option.Diabetes_test_mode, prefix+'checkpoint_step_%04d.pth' % step)
+        if self.option.bias_type == "I":
+            filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.minority, str(self.option.minority_size), prefix+'checkpoint_step_%04d.pth' % step)
+        elif self.option.bias_type == "II":
+            filename = os.path.join(self.option.save_dir, self.option.exp_name, self.option.Diabetes_train_mode, self.option.Diabetes_test_mode, prefix+'checkpoint_step_%04d.pth' % step)
         torch.save({
             'step': step,
             'feaExtractor': self.feaExtractor.state_dict(),
@@ -374,19 +380,31 @@ class Trainer(object):
             self._scheduler_step()
             if step == 0 or step % self.option.save_step == 0 or step == (self.option.max_step - 1):
                 if val_loader is not None:
-                    acc = self._validate(val_loader, step)
+                    acc, test_acc_p, test_acc_n, D = self._validate(val_loader, step)
                     # if not math.isnan(acc):
                     final_acc = acc
 
             self._save_model(step)
 
-        import datetime
-        import utils
-        data = {
-            'Time': [datetime.datetime.now()],
-            'Train': [self.Diabetes_train_mode],
-            'Test': [self.Diabetes_test_mode],
-            'CSAD': [final_acc * 100]
-            }
-        utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'Diabetes_CSAD_trials.csv'))
 
+       # Output the mean AP for the best model on dev and test set
+        if self.option.bias_type == "I":
+            data = {
+                'Time': [datetime.datetime.now()],
+                'Bias': [self.opt['bias_attr']],
+                'Minority': [self.opt['minority']],
+                'Minority_size': [self.opt['minority_size']],
+                'Test_acc_old': [test_acc_p*100],
+                'Test_acc_young': [test_acc_n*100],
+                'D': [D*100],
+                }
+            utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'Diabetes_CSAD_I_trials.csv'))
+        elif self.option.bias_type == "II":
+            data = {
+                'Time': [datetime.datetime.now()],
+                'Bias': [self.opt['bias_attr']],
+                'Train': [self.opt['Diabetes_train_mode']],
+                'Test': [self.opt['Diabetes_test_mode']],
+                'Test Acc': [final_acc * 100]
+                }
+            utils.append_data_to_csv(data, os.path.join(self.exp_dir, 'Diabetes_CSAD_II_trials.csv'))

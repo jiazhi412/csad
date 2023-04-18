@@ -7,11 +7,16 @@ from trainer_Diabetes import Trainer
 from utils import save_option_Diabetes
 import argparse
 from dataloader.Diabetes import DiabetesDataset 
+from dataloader.Diabetes_I import DiabetesDataset_I
+from dataloader.Diabetes_II import DiabetesDataset_II
 # import warnings
 # warnings.filterwarnings("ignore")
 
 def backend_setting(option):
-    log_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
+    if option.bias_type == "I":
+        log_dir = os.path.join(option.save_dir, option.exp_name, option.minority, str(option.minority_size))
+    elif option.bias_type == "II":
+        log_dir = os.path.join(option.save_dir, option.exp_name, option.Diabetes_train_mode, option.Diabetes_test_mode)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -36,6 +41,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-e', '--exp_name', default='Diabetes', help='experiment name')
+    parser.add_argument('--load_path', default='/nas/vista-ssd01/users/jiazli/datasets/Diabetes/Diabetes_newData.csv')
     parser.add_argument('--checkpoint', default=None, help='checkpoint to resume')
     parser.add_argument('--lr', default=0.00005, type=float, help='initial learning rate')
     parser.add_argument('--random_seed', default=None, type=int, help='random seed')
@@ -45,7 +51,7 @@ def main():
     parser.add_argument('--n_class', default=1, type=int, help='number of classes')
     parser.add_argument('--n_class_bias', default=1, type=int, help='number of bias classes')
     parser.add_argument('--input_size', default=224, type=int, help='input size')
-    parser.add_argument('--batch_size', default=128, type=int, help='mini-batch size')
+    parser.add_argument('--batch_size', default=32, type=int, help='mini-batch size')
     parser.add_argument('--momentum', default=0.9, type=float, help='sgd momentum')
     parser.add_argument('--lr_decay_rate', default=0.1, type=float, help='lr decay rate')
     parser.add_argument('--weight_decay', default=0.0005, type=float, help='sgd optimizer weight decay')
@@ -67,28 +73,54 @@ def main():
     parser.add_argument('--is_train', default=1, type=int, help='whether it is training')
 
     ## Census
-    parser.add_argument("--bias_name", type=str, default='age', choices=['sex', 'race', 'age'])
-    ## Diabetes
+    parser.add_argument("--bias_attr", type=str, default='age', choices=['sex', 'race', 'age'])
+    parser.add_argument("--bias_type", type=str, default='I', choices=['I', 'II', 'General'])
+
+    # Type I Bias
+    parser.add_argument("--minority", type=str, default='young')
+    parser.add_argument("--minority_size", type=int, default=100)
+
+    # Type II Bias
     parser.add_argument("--Diabetes_train_mode", type=str, default='eb1')
-    parser.add_argument("--Diabetes_test_mode", type=str, default='unbiased')
+    parser.add_argument("--Diabetes_test_mode", type=str, default='eb2')
 
     option = parser.parse_args()
+    opt = vars(option)
     print(option)
     backend_setting(option)
     trainer = Trainer(option)
+    
+    print('Note', 'YoungP', 'YoungN', 'OldP', 'OldN')
+    # imbalance 
+    if opt['bias_type'] == 'I':
+        # split 80% for train and 20% for test
+        print("Train")
+        train_set = DiabetesDataset_I(path=opt['load_path'], quick_load=True, bias_attr=opt['bias_attr'], middle_age=0, 
+                    minority=opt['minority'], minority_size=opt['minority_size'], mode='train')
+        print("Test")
+        test_set = DiabetesDataset_I(path=opt['load_path'], quick_load=True, bias_attr=opt['bias_attr'], middle_age=0, 
+                    minority=None, mode='test', balance=True, idx=train_set.get_idx())
+        dev_set = test_set
 
-    data_folder = '/nas/vista-ssd01/users/jiazli/datasets/Diabetes/Diabetes_newData.csv'
-    train_set = DiabetesDataset(data_folder, option.Diabetes_train_mode, quick_load=True, bias_name=option.bias_name)
-    dev_set = DiabetesDataset(data_folder, option.Diabetes_test_mode, quick_load=True, bias_name=option.bias_name)
-    test_set = DiabetesDataset(data_folder, option.Diabetes_test_mode, quick_load=True, bias_name=option.bias_name)
+    if opt['bias_type'] == 'II':
+        print("Train")
+        train_set = DiabetesDataset_II(path=opt['load_path'], quick_load=True, bias_attr=opt['bias_attr'], middle_age=0, 
+                    mode=opt['Diabetes_train_mode'])
+        print("Val")
+        dev_set = DiabetesDataset_II(path=opt['load_path'], quick_load=True, bias_attr=opt['bias_attr'], middle_age=0, 
+                    mode=opt['Diabetes_test_mode'], idx=train_set.get_idx())
+        print("Test")
+        test_set = DiabetesDataset_II(path=opt['load_path'], quick_load=True, bias_attr=opt['bias_attr'], middle_age=0, 
+                    mode=opt['Diabetes_test_mode'], idx=train_set.get_idx())
 
-    trainval_loader = torch.utils.data.DataLoader(train_set, batch_size=option.batch_size, shuffle=True, num_workers=4, drop_last=True, pin_memory=True)
-    dev_loader = torch.utils.data.DataLoader(dev_set, batch_size=option.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=option.batch_size, shuffle=True, num_workers=4, drop_last=True, pin_memory=True)
+    dev_loader = torch.utils.data.DataLoader(dev_set, batch_size=option.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=option.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     if option.is_train == 1:
         save_option_Diabetes(option)
-        trainer.train(trainval_loader, dev_loader)
+        trainer.train(train_loader, dev_loader)
     else:
-        trainer._validate(trainval_loader)
+        trainer._validate(test_loader)
 
 if __name__ == '__main__': main()
